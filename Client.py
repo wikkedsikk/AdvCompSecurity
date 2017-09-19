@@ -1,51 +1,59 @@
 import socket
 from Crypto.Random import random
 from Crypto.Cipher import AES
+from Crypto.Hash import MD5
 from Crypto.Hash import SHA256
-import sys
 
+sessionID = 0 #SessionID to keep track of which session we are at
+
+############ Padding function for data ############
 BLOCK_SIZE=16
 pad = lambda s: s + (BLOCK_SIZE - len(s) % BLOCK_SIZE) * chr(BLOCK_SIZE - len(s) % BLOCK_SIZE)
 unpad = lambda s: s[:-ord(s[len(s) - 1:])]
 
-sessionID = 0;
 while sessionID < 3:
+    ############ Setup the socket connection ############
     UDP_IP = "localhost"
     UDP_PORT = 5004
     soc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     soc.bind((UDP_IP, UDP_PORT))
 
-    clientSecret = random.randint(1000, 1000000)
+    ############ Setup the predefined variables ############
+    clientSecret = random.randint(10000, 10000000)
     sharedBase = 123123
-    sharedPrime = 28894168311768357401899071200979519367584561514756423416043407424366358089765137721969343124410199219409767121293311844494553978897429563852027241420266248792272446039823985284920518325857671660201824712071585658761783163595939965642429159649000821474939376513696874834821123755837700720260008792402520994463966279163406594495256298820533042016219844237136312035186285435253143971857498938314110927819696637217086882893503422275857455341300900826497977775893550130968292538687465266315987428546046183866136605231770463808246035584917559385136718875090747467053956576939446056421176315711375543516925496498920321902033
-    sharedPrime = int(sharedPrime, 16)
+    sharedPrime = 28179039560857009771306385663575251465052082209256736565907679869413612872371241248284494255009242077272408811726234373148009182527040182165419963413046582426487611124844965777992274583617626036115771440229501145474648321022457058308067410361304658415442447673142889855267530516296541964237928301744697008429310224155979751780042056048479779362563342726170674523163417674197214202557774791726117675762530762368982188520808798163743645092954998925124938709663901524320625995630509126661619543571593502122965594779116520081239146808571199809359872902653368467099079623850650766762691133591987141197121690464975665361051
+    PSK = "0#Ab!w&P12b4p6%!"
 
-    PSK = "0123456701234567"
-    secureMessage = "Im client, hello"
+    #######################################
+    #########      Handshake      #########
+    #######################################
 
+    ############ Diffe-Hellman key exchange ############
     A = pow(sharedBase, clientSecret, sharedPrime)
     Astr = str(A)
-
     soc.sendto(Astr, ("127.0.0.1", 5005)) # Calculated Diffie-Hellmans A is sent to server.
-    
     serverB = soc.recv(4096) # Servers calculated Diffie-Hellmans B is recieved by client.
-    B = int(serverB)
-
+    B = long(serverB)
     sharedSecret = pow(B, clientSecret, sharedPrime)
     strSecret = pad(str(sharedSecret)) # Padding to get length of multiple of 16.
+    #print "The clients A value: " + Astr
+    #print "The servers B value: " + serverB
+    #print "The calculated shared secret: " + strSecret
 
+    ############ Authentication of client ############
+    salt_PSK = PSK + str(sessionID)
+    hash_salt_PSK = SHA256.new(salt_PSK)# Client encrypts its Secure Message with AES-object.
+    soc.sendto(hash_salt_PSK.hexdigest(), ("127.0.0.1",5005)) # Client sends its encrypted Secure Message to authenticate.
+    server_hash_PSK = soc.recv(4096) # Recieves severs encrypted Secure Message
+    #print "Servers salted PSK: " + hash_salt_PSK.hexdigest()
+    #print "Client salted PSK: " + server_hash_PSK
 
+    if server_hash_PSK == hash_salt_PSK.hexdigest(): #Compare authentication to approve data transfer
+        #######################################
+        ############ Data exchange ############
+        #######################################
 
-    client_PSK = AES.new(PSK) # Creates a AES-object with Pre-Shared-Key
-    ecr_client_secure_message = client_PSK.encrypt(secureMessage) # Client encrypts its Secure Message with AES-object.
-    soc.sendto(ecr_client_secure_message, ("127.0.0.1",5005)) # Client sends its encrypted Secure Message to authenticate.
-
-    ecr_server_Secure_Message = soc.recv(4096) # Recieves severs encrypted Secure Message
-    cipher_server_PSK = AES.new(PSK) # Creates a AES-object to decrypt Servers Secure Message
-    decr_server_Secure_Message = cipher_server_PSK.decrypt(ecr_server_Secure_Message) # Decrypts servers encrypted Secure Message
-
-    if decr_server_Secure_Message == "Im server, hello": #Compare servers Secure Message
-
+        ######## Collection of data ########
         maxLength = 0
         data = str(sessionID) + " "
         print "Numbers entered will be the simulated data from a IoT sensor between " + str(sessionID*8) +":00-" + str((sessionID*8)+8) +":00"
@@ -54,15 +62,17 @@ while sessionID < 3:
             data += str(value) + " "
             maxLength += 1
 
-
-        print data
-
+        ######## Send the hash of data ########
         h = SHA256.new(data)
-        hCypher = AES.new(strSecret)
+        h_secret = MD5.new(strSecret)
+        hCypher = AES.new(h_secret.hexdigest())
         hcrypt = hCypher.encrypt(h.hexdigest())
         soc.sendto(hcrypt, ("127.0.0.1", 5005))
+        #print "Encrypted data sent from client: " + hcrypt
+        #print "Decrypted data sent from client: " + data
 
-        obj = AES.new(strSecret)
+        ############ Send the data ############
+        obj = AES.new(h_secret.hexdigest())
         cipher = obj.encrypt(pad(data))
         soc.sendto(cipher, ("127.0.0.1", 5005))
 
@@ -71,5 +81,3 @@ while sessionID < 3:
     else:
         print "Wrong authentication"
         soc.close()
-
-
